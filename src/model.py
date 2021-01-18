@@ -1,5 +1,7 @@
 import numpy as np
-import tensorflow as tf
+import tensorflow.compat.v1 as tf
+tf.disable_v2_behavior()
+
 from src.utils import iter_data, count_parameters, AttrDict
 
 def default_hparams():
@@ -159,7 +161,7 @@ def model(hparams, X, Y=None, past=None, scope='model', reuse=False):
         results = {}
         batch, sequence = shape_list(X)
 
-        if hparams.bert:
+        if hparams.bert:  # build BERT mask
             M = tf.greater(tf.random.uniform([batch, sequence]), hparams.bert_mask_prob)
             M = tf.cast(M, tf.float32)
 
@@ -206,22 +208,5 @@ def model(hparams, X, Y=None, past=None, scope='model', reuse=False):
             results['gen_loss'] = tf.reduce_mean(gen_losses)
         else:
             results['gen_loss'] = tf.reduce_mean(gen_losses)
-
-        # Classification loss.
-        with tf.variable_scope('clf', reuse=reuse):
-            classes = shape_list(Y)[1]
-            if hparams.clf:
-                wclf = tf.get_variable('wclf', [classes, hparams.n_embd],
-                                      initializer=tf.random_normal_initializer(stddev=0.0))
-            else:
-                wclf = tf.zeros([classes, hparams.n_embd], dtype=tf.float32)
-
-        h = tf.reduce_mean(h, axis=1)  # average pool over sequence
-        clf_logits = tf.matmul(h, wclf, transpose_b=True)
-        clf_losses = tf.nn.softmax_cross_entropy_with_logits_v2(logits=clf_logits, labels=Y)
-        results['clf_loss'] = tf.reduce_mean(clf_losses)
-
-        correct = tf.equal(tf.argmax(clf_logits, -1), tf.argmax(Y, -1))
-        results['accuracy'] = tf.reduce_mean(tf.cast(correct, tf.float32)) * 100.0
 
         return results

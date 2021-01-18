@@ -6,7 +6,8 @@ import subprocess
 import math
 
 import numpy as np
-import tensorflow as tf
+import tensorflow.compat.v1 as tf
+tf.disable_v2_behavior()
 
 class AttrDict(dict):
     def __init__(self, *args, **kwargs):
@@ -14,7 +15,7 @@ class AttrDict(dict):
         self.__dict__ = self
 
 def iter_data(*datas, n_batch=128, truncate=False, verbose=False, max_batches=float("inf")):
-    n = len(datas[0])
+    n = datas[0].shape[0]
     if truncate:
         n = (n//n_batch)*n_batch
     n = min(n, max_batches*n_batch)
@@ -50,3 +51,11 @@ def count_parameters():
             variable_parameters *= dim.value
         total_parameters += variable_parameters
     return total_parameters
+
+def stuff2pickle(stuff, f_path):
+    with open(f_path, 'wb') as fp:
+        pickle.dump(stuff, fp)
+
+def load_pickle(f_path):
+    with open(f_path, 'rb') as fp:
+        return pickle.load(fp)

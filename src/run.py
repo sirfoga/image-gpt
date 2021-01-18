@@ -7,7 +7,9 @@ import sys
 import time
 
 import numpy as np
-import tensorflow as tf
+
+import tensorflow.compat.v1 as tf
+tf.disable_v2_behavior()
 
 from imageio import imwrite
 from scipy.special import softmax
@@ -39,7 +41,8 @@ H_CONFIG = {
     'n_px': 32,  # square image size in pixels
     'eval': False,  # not needed (for now)
     'sample': False,  # not needed (for now)
-    'seed': 42
+    'seed': 42,
+    'train_epochs': 30
 }
 
 
@@ -98,7 +101,7 @@ def load_data(data_path):
 def set_hparams(args):
     return AttrDict(
         dict(
-            n_ctx=args.n_px*args.n_px,
+            n_ctx=args.n_px * args.n_px,
             n_embd=args.n_embd,
             n_head=args.n_head,
             n_layer=args.n_layer,
@@ -110,55 +113,45 @@ def set_hparams(args):
     )
 
 
-def create_model(x, y, n_gpu, hparams):
-    gen_logits = []
-    gen_loss = []
-    clf_loss = []
-    tot_loss = []
-    accuracy = []
+def reduce_mean(gen_loss, tot_loss, n_gpu):
+    with tf.device("/gpu:0"):
+        for i in range(1, n_gpu):
+            gen_loss[0] += gen_loss[i]  # reduce
+            tot_loss[0] += tot_loss[i]
 
+        gen_loss[0] /= n_gpu  # mean
+        tot_loss[0] /= n_gpu
+
+
+def create_model(x, y=None, n_gpu=1, hparams=None):
     trainable_params = None
     for i in range(n_gpu):
         with tf.device("/gpu:%d" % i):
-            results = model(hparams, x[i], y[i], reuse=(i != 0))
+            reuse = True  # i != 0  # reuse params just in GPU > 0
+
+            if y:
+                results = model(hparams, x[i], y[i], reuse=reuse)
+            else:
+                results = model(hparams, x[i], reuse=reuse)
 
             gen_logits.append(results["gen_logits"])
             gen_loss.append(results["gen_loss"])
-            clf_loss.append(results["clf_loss"])
 
-            if hparams.clf:
-                tot_loss.append(results["gen_loss"] + results["clf_loss"])
-            else:
-                tot_loss.append(results["gen_loss"])
-
-            accuracy.append(results["accuracy"])
+            tot_loss.append(results["gen_loss"])
 
             if i == 0:
                 trainable_params = tf.trainable_variables()
                 print("trainable parameters:", count_parameters())
 
-    return trainable_params, gen_logits, gen_loss, clf_loss, tot_loss, accuracy
+    return trainable_params, gen_logits, gen_loss, tot_loss
 
 
-def reduce_mean(gen_loss, clf_loss, tot_loss, accuracy, n_gpu):
-    with tf.device("/gpu:0"):
-        for i in range(1, n_gpu):
-            gen_loss[0] += gen_loss[i]
-            clf_loss[0] += clf_loss[i]
-            tot_loss[0] += tot_loss[i]
-            accuracy[0] += accuracy[i]
-        gen_loss[0] /= n_gpu
-        clf_loss[0] /= n_gpu
-        tot_loss[0] /= n_gpu
-        accuracy[0] /= n_gpu
-
-
-def evaluate(sess, evX, evY, X, Y, gen_loss, clf_loss, accuracy, n_batch, desc, permute=False):
+def evaluate(sess, evX, evY, X, Y, gen_loss, n_batch, desc, permute=False):
     metrics = []
     for xmb, ymb in iter_data(evX, evY, n_batch=n_batch, truncate=True, verbose=True):
-        metrics.append(sess.run([gen_loss[0], clf_loss[0], accuracy[0]], {X: xmb, Y: ymb}))
-    eval_gen_loss, eval_clf_loss, eval_accuracy = [np.mean(m) for m in zip(*metrics)]
-    print(f"{desc} gen: {eval_gen_loss:.4f} clf: {eval_clf_loss:.4f} acc: {eval_accuracy:.2f}")
+        metrics.append(sess.run([gen_loss[0]], {X: xmb, Y: ymb}))
+    eval_gen_loss,  = [np.mean(m) for m in zip(*metrics)]
+    print(f"{desc} gen: {eval_gen_loss:.4f}")
 
 
 # naive sampler without caching
@@ -172,7 +165,7 @@ def sample(sess, X, gen_logits, n_sub_batch, n_gpu, n_px, n_vocab, clusters, sav
             for k in range(n_sub_batch):
                 c = np.random.choice(n_vocab, p=p[k])  # choose based on probas
                 samples[j * n_sub_batch + k, i] = c
-    
+
     # dequantize
     samples = [np.reshape(np.rint(127.5 * (clusters[s] + 1.0)), [32, 32, 3]).astype(np.uint8) for s in samples]
 
@@ -191,7 +184,7 @@ def main(args):
     elif args.data_path.endswith("imagenet"):
         n_class = 1000
     else:
-        raise ValueError("Dataset not supported.")
+        n_class = 0  # dataset not supported
 
     X = tf.placeholder(tf.int32, [n_batch, args.n_px * args.n_px])
     Y = tf.placeholder(tf.float32, [n_batch, n_class])
@@ -200,8 +193,8 @@ def main(args):
     y = tf.split(Y, args.n_gpu, 0)
 
     hparams = set_hparams(args)
-    trainable_params, gen_logits, gen_loss, clf_loss, tot_loss, accuracy = create_model(x, y, args.n_gpu, hparams)
-    reduce_mean(gen_loss, clf_loss, tot_loss, accuracy, args.n_gpu)
+    trainable_params, gen_logits, gen_loss, tot_loss = create_model(x, y, args.n_gpu, hparams)
+    reduce_mean(gen_loss, tot_loss, args.n_gpu)
 
     saver = tf.train.Saver(var_list=[tp for tp in trainable_params if not 'clf' in tp.name])
     with tf.Session(config=tf.ConfigProto(allow_soft_placement=True, log_device_placement=False)) as sess:
@@ -211,9 +204,9 @@ def main(args):
 
         if args.eval:
             (trX, trY), (vaX, vaY), (teX, teY) = load_data(args.data_path)
-            evaluate(sess, trX[:len(vaX)], trY[:len(vaY)], X, Y, gen_loss, clf_loss, accuracy, n_batch, "train")
-            evaluate(sess, vaX, vaY, X, Y, gen_loss, clf_loss, accuracy, n_batch, "valid")
-            evaluate(sess, teX, teY, X, Y, gen_loss, clf_loss, accuracy, n_batch, "test")
+            evaluate(sess, trX[:len(vaX)], trY[:len(vaY)], X, Y, gen_loss, n_batch, "train")
+            evaluate(sess, vaX, vaY, X, Y, gen_loss, n_batch, "valid")
+            evaluate(sess, teX, teY, X, Y, gen_loss, n_batch, "test")
 
         if args.sample:
             if not os.path.exists(args.save_dir):
