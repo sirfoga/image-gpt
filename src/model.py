@@ -1,14 +1,16 @@
 import numpy as np
 import tensorflow as tf
-from tensorflow.contrib.training import HParams
+from src.utils import iter_data, count_parameters, AttrDict
 
 def default_hparams():
-    return HParams(
-        n_vocab=0,
-        n_ctx=1024,
-        n_embd=768,
-        n_head=12,
-        n_layer=12,
+    return AttrDict(
+        dict(
+            n_vocab=0,
+            n_ctx=1024,
+            n_embd=768,
+            n_head=12,
+            n_layer=12,
+        )
     )
 
 def shape_list(x):

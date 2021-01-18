@@ -11,11 +11,36 @@ import tensorflow as tf
 
 from imageio import imwrite
 from scipy.special import softmax
-from tensorflow.contrib.training import HParams
-from tqdm import tqdm
 
-from model import model
-from utils import iter_data, count_parameters
+from src.model import model
+from src.utils import iter_data, count_parameters, AttrDict
+
+
+IMAGE_GPT_CONFIGS = {
+    's': {
+        'n_ctx': 32 * 32,  # 32-pixel square image
+        'n_embd': 512,
+        'n_head': 8,
+        'n_layer': 24,
+        'n_vocab': 256,  # grayscale image
+        'bert': True,
+        'bert_mask_prob': 0.15,
+        'clf': False,  # no classification fine-tuning
+    }
+}
+
+H_CONFIG = {
+    'data_path': './data/',
+    'ckpt_path': './ckpt/',
+    'color_cluster_path': './quants/',
+    'save_dir': './results/',
+    'n_sub_batch': 8,
+    'n_gpu': 1,  # we are poor
+    'n_px': 32,  # square image size in pixels
+    'eval': False,  # not needed (for now)
+    'sample': False,  # not needed (for now)
+    'seed': 42
+}
 
 
 def parse_arguments():
@@ -71,15 +96,17 @@ def load_data(data_path):
 
 
 def set_hparams(args):
-    return HParams(
-        n_ctx=args.n_px*args.n_px,
-        n_embd=args.n_embd,
-        n_head=args.n_head,
-        n_layer=args.n_layer,
-        n_vocab=args.n_vocab,
-        bert=args.bert,
-        bert_mask_prob=args.bert_mask_prob,
-        clf=args.clf,
+    return AttrDict(
+        dict(
+            n_ctx=args.n_px*args.n_px,
+            n_embd=args.n_embd,
+            n_head=args.n_head,
+            n_layer=args.n_layer,
+            n_vocab=args.n_vocab,
+            bert=args.bert,
+            bert_mask_prob=args.bert_mask_prob,
+            clf=args.clf,
+        )
     )
 
 
@@ -138,7 +165,7 @@ def evaluate(sess, evX, evY, X, Y, gen_loss, clf_loss, accuracy, n_batch, desc, 
 def sample(sess, X, gen_logits, n_sub_batch, n_gpu, n_px, n_vocab, clusters, save_dir):
     samples = np.zeros([n_gpu * n_sub_batch, n_px * n_px], dtype=np.int32)
 
-    for i in tqdm(range(n_px * n_px), ncols=80, leave=False):
+    for i in range(n_px * n_px):
         np_gen_logits = sess.run(gen_logits, {X: samples})
         for j in range(n_gpu):
             p = softmax(np_gen_logits[j][:, i, :], axis=-1)  # logits to probas

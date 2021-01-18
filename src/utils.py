@@ -4,10 +4,14 @@ import time
 import pickle
 import subprocess
 import math
-from tqdm import tqdm
 
 import numpy as np
 import tensorflow as tf
+
+class AttrDict(dict):
+    def __init__(self, *args, **kwargs):
+        super(AttrDict, self).__init__(*args, **kwargs)
+        self.__dict__ = self
 
 def iter_data(*datas, n_batch=128, truncate=False, verbose=False, max_batches=float("inf")):
     n = len(datas[0])
@@ -15,7 +19,7 @@ def iter_data(*datas, n_batch=128, truncate=False, verbose=False, max_batches=fl
         n = (n//n_batch)*n_batch
     n = min(n, max_batches*n_batch)
     n_batches = 0
-    for i in tqdm(range(0, n, n_batch), total=n//n_batch, disable=not verbose, ncols=80, leave=False):
+    for i in range(0, n, n_batch):
         if n_batches >= max_batches: raise StopIteration
         if len(datas) == 1:
             yield datas[0][i:i+n_batch]
